@@ -119,6 +119,14 @@ timeline marker selection, rejected malformed input and preservation of existing
 scenes. `blender-receipt.json` records measured projection error and Blender
 version. A successful run prints `BLENDER_CAMERA_PROJECTION_OK`.
 
+Camera keys are allocated in batches per animation channel. A synthetic
+single-camera capacity check on Windows with Blender 5.2.2 LTS imported all
+100,000 supported frames (700,000 location/quaternion keys) in 1.42 seconds,
+saved in 0.19 seconds and reopened in 0.06 seconds. It checked every channel's
+key count and linear interpolation, plus the first, middle and last camera
+poses before saving and after reopening. These timings measure camera-data
+import, without rendering.
+
 Run the repository's normal unit, build, format and boundary checks too. The
 contribution guide additionally requires live tracking/browser checks before
 submission; this camera check does not replace them.
