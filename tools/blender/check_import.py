@@ -99,7 +99,14 @@ def check_all():
         cameras = {json.loads(obj["gev_shot"])["id"]: obj for obj in scene.objects if "gev_shot" in obj}
         assert set(cameras) == {shot["id"] for shot in manifest["shots"]}
         for shot in manifest["shots"]:
-            assert json.loads(cameras[shot["id"]]["gev_shot"]) == shot
+            camera = cameras[shot["id"]]
+            assert json.loads(camera["gev_shot"]) == shot
+            expected_frames = [sample["frame"] for sample in manifest["frames"] if sample["shotId"] == shot["id"]]
+            curves = list(importer._camera_curves(camera))
+            assert len(curves) == 7, "Expected three location and four quaternion channels"
+            for curve in curves:
+                assert [key.co[0] for key in curve.keyframe_points] == expected_frames
+                assert all(key.interpolation == "LINEAR" for key in curve.keyframe_points)
         for item in case["checks"]:
             scene.frame_set(item["frame"])
             active = scene.camera

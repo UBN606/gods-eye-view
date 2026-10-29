@@ -157,11 +157,47 @@ def read_manifest(path):
     return validate_manifest(json.loads(payload))
 
 
+def _camera_curves(camera):
+    """Read this camera's curves from current slotted or older legacy actions."""
+    action = camera.animation_data.action
+    if hasattr(action, "layers") and action.layers:
+        for layer in action.layers:
+            for strip in layer.strips:
+                bag = strip.channelbag(camera.animation_data.action_slot)
+                if bag:
+                    yield from bag.fcurves
+    else:
+        yield from action.fcurves
+
+
+def _write_camera_keys(camera, samples):
+    """Allocate each F-Curve once, avoiding repeated insertion/handle updates."""
+    first = samples[0]
+    camera.location = first[1]
+    camera.rotation_quaternion = first[2]
+    # Let Blender create the appropriate action/slot for its own API version.
+    camera.keyframe_insert(data_path="location", frame=first[0])
+    camera.keyframe_insert(data_path="rotation_quaternion", frame=first[0])
+    for curve in _camera_curves(camera):
+        channel = 1 if curve.data_path == "location" else 2
+        component = curve.array_index
+        coordinates = [value for frame, location, rotation in samples
+                       for value in (frame, (location if channel == 1 else rotation)[component])]
+        points = curve.keyframe_points
+        points.clear()
+        points.add(len(samples))
+        points.foreach_set("co", coordinates)
+        # Keep the exact sampled motion, rather than Blender's default Bezier.
+        for key in points:
+            key.interpolation = "LINEAR"
+        curve.update()
+
+
 def import_manifest(data):
     """Create a new scene with editable per-shot cameras; preserve existing scenes."""
     validate_manifest(data)
     import bpy
-    from mathutils import Matrix, Vector
+    from mathutils import Matrix
 
     scene = bpy.data.scenes.new(f"GEV {data['source'].get('sceneTitle') or data['source']['sceneId']}")
     scene.unit_settings.system = "METRIC"
@@ -201,8 +237,8 @@ def import_manifest(data):
         marker = scene.timeline_markers.new(f"GEV {shot['id']}", frame=int(shot["frameStart"]))
         marker.camera = camera
     previous = {}
+    keys = {shot_id: [] for shot_id in cameras}
     for sample in data["frames"]:
-        camera = cameras[sample["shotId"]]
         # Manifest vectors are columns, while mathutils.Matrix accepts rows.
         basis = Matrix(sample["basisColumns"]).transposed()
         rotation = basis.to_quaternion().normalized()
@@ -210,24 +246,9 @@ def import_manifest(data):
         if old is not None and rotation.dot(old) < 0:
             rotation.negate()
         previous[sample["shotId"]] = rotation.copy()
-        camera.location = Vector(sample["position"])
-        camera.rotation_quaternion = rotation
-        camera.keyframe_insert(data_path="location", frame=sample["frame"])
-        camera.keyframe_insert(data_path="rotation_quaternion", frame=sample["frame"])
-    # Blender defaults to Bezier, which would alter motion between sampled frames.
-    for camera in cameras.values():
-        action = camera.animation_data.action
-        if hasattr(action, "layers") and action.layers:
-            for layer in action.layers:
-                for strip in layer.strips:
-                    bag = strip.channelbag(camera.animation_data.action_slot)
-                    for curve in bag.fcurves if bag else []:
-                        for key in curve.keyframe_points:
-                            key.interpolation = "LINEAR"
-        else:
-            for curve in action.fcurves:
-                for key in curve.keyframe_points:
-                    key.interpolation = "LINEAR"
+        keys[sample["shotId"]].append((sample["frame"], sample["position"], tuple(rotation)))
+    for shot_id, camera in cameras.items():
+        _write_camera_keys(camera, keys[shot_id])
     scene.camera = cameras[data["shots"][0]["id"]]
     if bpy.context.window:
         bpy.context.window.scene = scene
